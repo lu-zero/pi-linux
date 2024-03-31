@@ -583,7 +583,7 @@
 };
 
 &aout {
-	status = "okay";
+	status = "disabled";
 };
 
 &hrx {
@@ -596,7 +596,7 @@
 
 &i2s_pri {
 	status = "okay";
-	pinctrl-0 = <&i2s1_pmux>, <&spdifo_pmux>;
+	pinctrl-0 = <&i2s1_pmux>;
 	pinctrl-names = "default";
 };
 
@@ -639,6 +639,10 @@
 };
 
 &i2s_hdmi_lpbk {
+	status = "okay";
+};
+
+&hdmi_out {
 	status = "okay";
 };
 
@@ -760,6 +764,17 @@
 		codec-dai-name = "snd-soc-dummy-dai";
 		platform-node = <&vs680_pcm>;
 	};
+
+        soc_hdmio: soc-hdmio {
+                status = "okay";
+                stream-name = "soc-hdmio";
+                link-name = "soc-hdmio";
+                format = "i2s";
+                cpu-node = <&hdmi_out>;
+                codec-name = "snd-soc-dummy";
+                codec-dai-name = "snd-soc-dummy-dai";
+                platform-node = <&vs680_pcm>;
+        };
 };
 
 &ovp {
