@@ -19,6 +19,7 @@
 #include <linux/firmware/imx/sci.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/reset.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
@@ -369,6 +370,17 @@ static const struct flexcan_devtype_data fsl_lx2160a_r1_devtype_data = {
 		FLEXCAN_QUIRK_SUPPORT_RX_MAILBOX_RTR,
 };
 
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+static const struct flexcan_devtype_data spacemit_k1x_devtype_data = {
+	.quirks = FLEXCAN_QUIRK_DISABLE_RXFG | FLEXCAN_QUIRK_ENABLE_EACEN_RRS |
+		FLEXCAN_QUIRK_DISABLE_MECR | FLEXCAN_QUIRK_BROKEN_PERR_STATE |
+		FLEXCAN_QUIRK_USE_RX_MAILBOX | FLEXCAN_QUIRK_SUPPORT_FD |
+		FLEXCAN_QUIRK_SUPPORT_RX_MAILBOX |
+		FLEXCAN_QUIRK_SUPPORT_RX_MAILBOX_RTR |
+		FLEXCAN_QUIRK_SUPPORT_ECC,
+};
+#endif
+
 static const struct can_bittiming_const flexcan_bittiming_const = {
 	.name = DRV_NAME,
 	.tseg1_min = 4,
@@ -595,11 +607,20 @@ static int flexcan_clks_enable(const struct flexcan_priv *priv)
 			clk_disable_unprepare(priv->clk_ipg);
 	}
 
+	if (priv->reset) {
+		err = reset_control_deassert(priv->reset);
+		if(err) {
+			clk_disable_unprepare(priv->clk_per);
+			clk_disable_unprepare(priv->clk_ipg);
+		}
+	}
+
 	return err;
 }
 
 static void flexcan_clks_disable(const struct flexcan_priv *priv)
 {
+	reset_control_assert(priv->reset);
 	clk_disable_unprepare(priv->clk_per);
 	clk_disable_unprepare(priv->clk_ipg);
 }
@@ -2001,6 +2022,7 @@ static const struct of_device_id flexcan_of_match[] = {
 	{ .compatible = "fsl,vf610-flexcan", .data = &fsl_vf610_devtype_data, },
 	{ .compatible = "fsl,ls1021ar2-flexcan", .data = &fsl_ls1021a_r2_devtype_data, },
 	{ .compatible = "fsl,lx2160ar1-flexcan", .data = &fsl_lx2160a_r1_devtype_data, },
+	{ .compatible = "spacemit,k1x-flexcan", .data = &spacemit_k1x_devtype_data, },
 	{ /* sentinel */ },
 };
 MODULE_DEVICE_TABLE(of, flexcan_of_match);
@@ -2023,6 +2045,7 @@ static int flexcan_probe(struct platform_device *pdev)
 	struct flexcan_priv *priv;
 	struct regulator *reg_xceiver;
 	struct clk *clk_ipg = NULL, *clk_per = NULL;
+	struct reset_control *reset;
 	struct flexcan_regs __iomem *regs;
 	struct flexcan_platform_data *pdata;
 	int err, irq;
@@ -2063,6 +2086,27 @@ static int flexcan_probe(struct platform_device *pdev)
 			return PTR_ERR(clk_per);
 		}
 		clock_freq = clk_get_rate(clk_per);
+	} else {
+		clk_per = devm_clk_get(&pdev->dev, "per");
+		if (IS_ERR(clk_per)) {
+			dev_err(&pdev->dev, "no per clock defined\n");
+			return PTR_ERR(clk_per);
+		}
+		clk_set_rate(clk_per, clock_freq);
+	}
+
+	if (!clk_ipg) {
+		clk_ipg = devm_clk_get(&pdev->dev, "ipg");
+		if (IS_ERR(clk_ipg)) {
+			dev_err(&pdev->dev, "no ipg clock defined\n");
+			return PTR_ERR(clk_ipg);
+		}
+	}
+
+	reset = devm_reset_control_get_optional(&pdev->dev,NULL);
+	if(IS_ERR(reset)) {
+		dev_err(&pdev->dev, "flexcan get reset failed\n");
+		return PTR_ERR(reset);
 	}
 
 	irq = platform_get_irq(pdev, 0);
@@ -2140,6 +2184,7 @@ static int flexcan_probe(struct platform_device *pdev)
 	priv->clk_ipg = clk_ipg;
 	priv->clk_per = clk_per;
 	priv->clk_src = clk_src;
+	priv->reset = reset;
 	priv->reg_xceiver = reg_xceiver;
 
 	if (priv->devtype_data.quirks & FLEXCAN_QUIRK_NR_IRQ_3) {

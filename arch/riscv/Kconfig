@@ -74,8 +74,8 @@ config RISCV
 	select HAVE_ARCH_AUDITSYSCALL
 	select HAVE_ARCH_JUMP_LABEL if !XIP_KERNEL
 	select HAVE_ARCH_JUMP_LABEL_RELATIVE if !XIP_KERNEL
-	select HAVE_ARCH_KASAN if MMU && 64BIT
-	select HAVE_ARCH_KASAN_VMALLOC if MMU && 64BIT
+	# select HAVE_ARCH_KASAN if MMU && 64BIT
+	# select HAVE_ARCH_KASAN_VMALLOC if MMU && 64BIT
 	select HAVE_ARCH_KFENCE if MMU && 64BIT
 	select HAVE_ARCH_KGDB if !XIP_KERNEL
 	select HAVE_ARCH_KGDB_QXFER_PKT
@@ -93,7 +93,7 @@ config RISCV
 	select HAVE_DMA_CONTIGUOUS if MMU
 	select HAVE_EBPF_JIT if MMU
 	select HAVE_FUNCTION_ERROR_INJECTION
-	select HAVE_GCC_PLUGINS
+	# select HAVE_GCC_PLUGINS
 	select HAVE_GENERIC_VDSO if MMU && 64BIT
 	select HAVE_IRQ_TIME_ACCOUNTING
 	select HAVE_KPROBES if !XIP_KERNEL
@@ -116,7 +116,7 @@ config RISCV
 	select MODULES_USE_ELF_RELA if MODULES
 	select MODULE_SECTIONS if MODULES
 	select OF
-	select OF_DMA_DEFAULT_COHERENT
+	# select OF_DMA_DEFAULT_COHERENT
 	select OF_EARLY_FLATTREE
 	select OF_IRQ
 	select PCI_DOMAINS_GENERIC if PCI
@@ -128,7 +128,8 @@ config RISCV
 	select THREAD_INFO_IN_TASK
 	select TRACE_IRQFLAGS_SUPPORT
 	select UACCESS_MEMCPY if !MMU
-	select ZONE_DMA32 if 64BIT
+	select ZONE_DMA32 if 64BIT && !SOC_SPACEMIT_K1PRO
+	select ARCH_SUSPEND_POSSIBLE
 
 config ARCH_MMAP_RND_BITS_MIN
 	default 18 if 64BIT
@@ -232,6 +233,12 @@ config RISCV_DMA_NONCOHERENT
 
 config AS_HAS_INSN
 	def_bool $(as-instr,.insn r 51$(comma) 0$(comma) 0$(comma) t0$(comma) t0$(comma) zero)
+
+config AS_HAS_OPTION_ARCH
+	# https://reviews.llvm.org/D123515
+	def_bool y
+	depends on $(as-instr, .option arch$(comma) +m)
+	depends on !$(as-instr, .option arch$(comma) -i)
 
 source "arch/riscv/Kconfig.socs"
 source "arch/riscv/Kconfig.erratas"
@@ -411,6 +418,50 @@ config RISCV_ISA_SVPBMT
 
 	   If you don't know what to do here, say Y.
 
+config TOOLCHAIN_HAS_V
+	bool
+	default y
+	depends on !64BIT || $(cc-option,-mabi=lp64 -march=rv64iv)
+	depends on !32BIT || $(cc-option,-mabi=ilp32 -march=rv32iv)
+	depends on LLD_VERSION >= 140000 || LD_VERSION >= 23800
+	depends on AS_HAS_OPTION_ARCH
+
+config RISCV_ISA_V
+	bool "VECTOR extension support"
+	depends on TOOLCHAIN_HAS_V
+	depends on FPU
+	select DYNAMIC_SIGFRAME
+	default y
+	help
+	  Say N here if you want to disable all vector related procedure
+	  in the kernel.
+
+	  If you don't know what to do here, say Y.
+
+config TOOLCHAIN_HAS_ZBB
+	bool
+	default y
+	depends on !64BIT || $(cc-option,-mabi=lp64 -march=rv64ima_zbb)
+	depends on !32BIT || $(cc-option,-mabi=ilp32 -march=rv32ima_zbb)
+	depends on LLD_VERSION >= 150000 || LD_VERSION >= 23900
+	depends on AS_HAS_OPTION_ARCH
+
+config RISCV_ISA_ZBB
+	bool "Zbb extension support for bit manipulation instructions"
+	depends on TOOLCHAIN_HAS_ZBB
+	depends on !XIP_KERNEL && MMU
+	select RISCV_ALTERNATIVE
+	default y
+	help
+	   Adds support to dynamically detect the presence of the ZBB
+	   extension (basic bit manipulation) and enable its usage.
+
+	   The Zbb extension provides instructions to accelerate a number
+	   of bit-specific operations (count bit population, sign extending,
+	   bitrotation, etc).
+
+	   If you don't know what to do here, say Y.
+
 config TOOLCHAIN_HAS_ZICBOM
 	bool
 	default y
@@ -432,6 +483,42 @@ config RISCV_ISA_ZICBOM
 
 	   The Zicbom extension can be used to handle for example
 	   non-coherent DMA support on devices that need it.
+
+	   If you don't know what to do here, say Y.
+
+config TOOLCHAIN_HAS_ZICBOZ
+	bool
+	default y
+	depends on !64BIT || $(cc-option,-mabi=lp64 -march=rv64ima_zicboz)
+	depends on !32BIT || $(cc-option,-mabi=ilp32 -march=rv32ima_zicboz)
+	depends on LLD_VERSION >= 150000 || LD_VERSION >= 23800
+
+config RISCV_ISA_ZICBOZ
+	bool "Zicboz extension support"
+	depends on TOOLCHAIN_HAS_ZICBOZ
+	depends on !XIP_KERNEL && MMU
+	default y
+	help
+	   Adds support to dynamically detect the presence of the ZICBOZ
+	   extension and enable its usage.
+
+	   If you don't know what to do here, say Y.
+
+config TOOLCHAIN_HAS_ZICBOP
+	bool
+	default y
+	depends on !64BIT || $(cc-option,-mabi=lp64 -march=rv64ima_zicbop)
+	depends on !32BIT || $(cc-option,-mabi=ilp32 -march=rv32ima_zicbop)
+	depends on LLD_VERSION >= 150000 || LD_VERSION >= 23800
+
+config RISCV_ISA_ZICBOP
+	bool "Zicboz extension support"
+	depends on TOOLCHAIN_HAS_ZICBOP
+	depends on !XIP_KERNEL && MMU
+	default y
+	help
+	   Adds support to dynamically detect the presence of the ZICBOP
+	   extension and enable its usage.
 
 	   If you don't know what to do here, say Y.
 
@@ -681,15 +768,28 @@ config PORTABLE
 	select OF
 	select MMU
 
+config IMAGE_LOAD_OFFSET
+	hex "Image load offset from start of RAM when load kernel to RAM"
+	default 0x400000 if 32BIT
+	default 0x200000 if 64BIT
+	help
+	  This is the RAM offset from start of ram. Bootloader would use
+	  this offset to load kernel image to ram.
+
 menu "Power management options"
 
 source "kernel/power/Kconfig"
+
+config ARCH_SUSPEND_POSSIBLE
+	depends on SOC_SPACEMIT
+	def_bool y
 
 endmenu # "Power management options"
 
 menu "CPU Power Management"
 
 source "drivers/cpuidle/Kconfig"
+source "drivers/cpufreq/Kconfig"
 
 endmenu # "CPU Power Management"
 

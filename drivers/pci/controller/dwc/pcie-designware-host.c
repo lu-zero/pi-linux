@@ -367,7 +367,10 @@ static int dw_pcie_msi_host_init(struct dw_pcie_rp *pp)
 						    dw_chained_msi_isr, pp);
 	}
 
-	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
+	if (IS_ENABLED(CONFIG_SOC_SPACEMIT_K1PRO))
+	        ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(40));
+	else
+                ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
 	if (ret)
 		dev_warn(dev, "Failed to set DMA mask to 32-bit. Devices with only 32-bit MSI support may not work properly\n");
 

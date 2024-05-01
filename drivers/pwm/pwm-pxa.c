@@ -14,6 +14,7 @@
 #include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/clk.h>
+#include <linux/reset.h>
 #include <linux/io.h>
 #include <linux/pwm.h>
 #include <linux/of_device.h>
@@ -45,7 +46,11 @@ struct pxa_pwm_chip {
 	struct device	*dev;
 
 	struct clk	*clk;
+	struct reset_control	*reset;
 	void __iomem	*mmio_base;
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+	int dcr_fd; /* Controller PWM_DCR FD feature */
+#endif
 };
 
 static inline struct pxa_pwm_chip *to_pxa_pwm_chip(struct pwm_chip *chip)
@@ -82,9 +87,31 @@ static int pxa_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 		return -EINVAL;
 
 	if (duty_ns == period_ns)
+#ifdef 	CONFIG_SOC_SPACEMIT_K1X
+	{
+		if(pc->dcr_fd)
+			dc = PWMDCR_FD;
+		else{
+			dc = (pv + 1) * duty_ns / period_ns;
+			if (dc >= PWMDCR_FD) {
+				dc = PWMDCR_FD - 1;
+				pv = dc - 1;
+			}
+		}
+	}
+#else
 		dc = PWMDCR_FD;
+#endif
 	else
 		dc = mul_u64_u64_div_u64(pv + 1, duty_ns, period_ns);
+
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+	/*
+	 * FIXME: Graceful shutdown mode would cause the function clock
+	 * could not be enabled normally, so chose abrupt shutdown mode.
+	 */
+	prescale |= PWMCR_SD;
+#endif
 
 	/* NOTE: the clock to PWM has to be enabled first
 	 * before writing to the registers
@@ -157,6 +184,9 @@ static const struct of_device_id pwm_of_match[] = {
 	{ .compatible = "marvell,pxa270-pwm", .data = &pwm_id_table[0]},
 	{ .compatible = "marvell,pxa168-pwm", .data = &pwm_id_table[0]},
 	{ .compatible = "marvell,pxa910-pwm", .data = &pwm_id_table[0]},
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+	{ .compatible = "spacemit,k1x-pwm", .data = &pwm_id_table[0]},
+#endif
 	{ }
 };
 MODULE_DEVICE_TABLE(of, pwm_of_match);
@@ -187,9 +217,25 @@ static int pwm_probe(struct platform_device *pdev)
 	if (pc == NULL)
 		return -ENOMEM;
 
+#ifdef CONFIG_SOC_SPACEMIT_K1X
+	if (pdev->dev.of_node) {
+		if(of_get_property(pdev->dev.of_node, "k1x,pwm-disable-fd", NULL))
+			pc->dcr_fd = 0;
+		else
+			pc->dcr_fd = 1;
+	}
+	else
+		pc->dcr_fd = 0;
+#endif
+
 	pc->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(pc->clk))
 		return PTR_ERR(pc->clk);
+
+	pc->reset = devm_reset_control_get_optional(&pdev->dev, NULL);
+	if(IS_ERR(pc->reset))
+		return PTR_ERR(pc->reset);
+	reset_control_deassert(pc->reset);
 
 	pc->chip.dev = &pdev->dev;
 	pc->chip.ops = &pxa_pwm_ops;
@@ -201,16 +247,22 @@ static int pwm_probe(struct platform_device *pdev)
 	}
 
 	pc->mmio_base = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(pc->mmio_base))
-		return PTR_ERR(pc->mmio_base);
+	if (IS_ERR(pc->mmio_base)) {
+		ret = PTR_ERR(pc->mmio_base);
+		goto err_rst;
+	}
 
 	ret = devm_pwmchip_add(&pdev->dev, &pc->chip);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "pwmchip_add() failed: %d\n", ret);
-		return ret;
+		goto err_rst;
 	}
 
 	return 0;
+
+err_rst:
+	reset_control_assert(pc->reset);
+	return ret;
 }
 
 static struct platform_driver pwm_driver = {

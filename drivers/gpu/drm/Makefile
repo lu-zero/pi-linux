@@ -148,3 +148,6 @@ obj-y			+= gud/
 obj-$(CONFIG_DRM_HYPERV) += hyperv/
 obj-y			+= solomon/
 obj-$(CONFIG_DRM_SPRD) += sprd/
+obj-$(CONFIG_DRM_SPACEMIT) += spacemit/
+obj-$(CONFIG_POWERVR_ROGUE_NULLDRMDISP) += nulldisp/
+obj-$(CONFIG_POWERVR_ROGUE) += img-rogue/

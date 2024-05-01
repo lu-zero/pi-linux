@@ -1329,6 +1329,10 @@ MODULE_LICENSE ("GPL");
 #include "ehci-grlib.c"
 #endif
 
+#ifdef CONFIG_USB_EHCI_K1X
+#include "ehci-k1x-ci.c"
+#endif
+
 static struct platform_driver * const platform_drivers[] = {
 #ifdef CONFIG_USB_EHCI_SH
 	&ehci_hcd_sh_driver,
@@ -1341,6 +1345,9 @@ static struct platform_driver * const platform_drivers[] = {
 #endif
 #ifdef CONFIG_SPARC_LEON
 	&ehci_grlib_driver,
+#endif
+#ifdef CONFIG_USB_EHCI_K1X
+	&ehci_k1x_driver,
 #endif
 };
 

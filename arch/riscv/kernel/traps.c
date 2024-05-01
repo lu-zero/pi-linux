@@ -24,6 +24,7 @@
 #include <asm/processor.h>
 #include <asm/ptrace.h>
 #include <asm/thread_info.h>
+#include <asm/vector.h>
 
 int show_unhandled_signals = 1;
 
@@ -111,8 +112,45 @@ DO_ERROR_INFO(do_trap_insn_misaligned,
 	SIGBUS, BUS_ADRALN, "instruction address misaligned");
 DO_ERROR_INFO(do_trap_insn_fault,
 	SIGSEGV, SEGV_ACCERR, "instruction access fault");
-DO_ERROR_INFO(do_trap_insn_illegal,
-	SIGILL, ILL_ILLOPC, "illegal instruction");
+
+#ifdef CONFIG_BIND_THREAD_TO_AICORES
+#include <linux/cpumask.h>
+#define AI_OPCODE_MASK0  0xFE0000FF
+#define AI_OPCODE_MATCH0 0xE200002B
+#define AI_OPCODE_MASK1  0xFE0000FF
+#define AI_OPCODE_MATCH1 0xE600002B
+#endif
+asmlinkage __visible __trap_section void do_trap_insn_illegal(struct pt_regs *regs)
+{
+	int flag = 0;
+#ifdef CONFIG_BIND_THREAD_TO_AICORES
+	u32 epc;
+#endif
+
+	if (has_vector() && user_mode(regs)) {
+		if (riscv_v_first_use_handler(regs)) {
+			flag = 1;
+		}
+	}
+
+#ifdef CONFIG_BIND_THREAD_TO_AICORES
+	__get_user(epc, (u32 __user *)regs->epc);
+	if ((epc & AI_OPCODE_MASK0) == AI_OPCODE_MATCH0 ||
+		(epc & AI_OPCODE_MASK1) == AI_OPCODE_MATCH1) {
+		struct cpumask mask;
+		pid_t pid = current->pid;
+
+		mask = ai_core_mask_get();
+		sched_setaffinity(pid, &mask);
+		flag = 1;
+	}
+#endif
+	if (!flag) {
+		do_trap_error(regs, SIGILL, ILL_ILLOPC, regs->epc,
+			"Oops - illegal instruction");
+	}
+}
+
 DO_ERROR_INFO(do_trap_load_fault,
 	SIGSEGV, SEGV_ACCERR, "load access fault");
 #ifndef CONFIG_RISCV_M_MODE

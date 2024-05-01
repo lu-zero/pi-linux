@@ -496,6 +496,13 @@ config VCPU_STALL_DETECTOR
 
 	  If you do not intend to run this kernel as a guest, say N.
 
+config SPACEMIT_TCM
+	bool "Generic tcm alloc management driver"
+	depends on SOC_SPACEMIT
+	default y
+	help
+	  This driver allows you to alloc tcm for userspace.
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"

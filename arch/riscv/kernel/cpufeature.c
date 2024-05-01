@@ -20,6 +20,7 @@
 #include <asm/processor.h>
 #include <asm/smp.h>
 #include <asm/switch_to.h>
+#include <asm/vector.h>
 
 #define NUM_ALPHA_EXTS ('z' - 'a' + 1)
 
@@ -68,6 +69,33 @@ bool __riscv_isa_extension_available(const unsigned long *isa_bitmap, int bit)
 }
 EXPORT_SYMBOL_GPL(__riscv_isa_extension_available);
 
+struct cpumask ai_core_mask_get(void)
+{
+	struct device_node *node;
+	const char *cpu_ai;
+	struct cpumask	cpu_mask;
+	unsigned long hartid;
+	int rc;
+
+	cpumask_clear(&cpu_mask);
+
+	for_each_of_cpu_node(node) {
+		rc = riscv_of_processor_hartid(node, &hartid);
+		if (rc < 0)
+			continue;
+
+		if (of_property_read_string(node, "cpu-ai", &cpu_ai)) {
+			continue;
+		}
+
+		if(!strcmp(cpu_ai, "true")) {
+			cpumask_set_cpu(hartid, &cpu_mask);
+		}
+	}
+
+	return cpu_mask;
+}
+
 void __init riscv_fill_hwcap(void)
 {
 	struct device_node *node;
@@ -77,12 +105,13 @@ void __init riscv_fill_hwcap(void)
 	static unsigned long isa2hwcap[256] = {0};
 	unsigned long hartid;
 
-	isa2hwcap['i'] = isa2hwcap['I'] = COMPAT_HWCAP_ISA_I;
-	isa2hwcap['m'] = isa2hwcap['M'] = COMPAT_HWCAP_ISA_M;
-	isa2hwcap['a'] = isa2hwcap['A'] = COMPAT_HWCAP_ISA_A;
-	isa2hwcap['f'] = isa2hwcap['F'] = COMPAT_HWCAP_ISA_F;
-	isa2hwcap['d'] = isa2hwcap['D'] = COMPAT_HWCAP_ISA_D;
-	isa2hwcap['c'] = isa2hwcap['C'] = COMPAT_HWCAP_ISA_C;
+	isa2hwcap['i' - 'a'] = COMPAT_HWCAP_ISA_I;
+	isa2hwcap['m' - 'a'] = COMPAT_HWCAP_ISA_M;
+	isa2hwcap['a' - 'a'] = COMPAT_HWCAP_ISA_A;
+	isa2hwcap['f' - 'a'] = COMPAT_HWCAP_ISA_F;
+	isa2hwcap['d' - 'a'] = COMPAT_HWCAP_ISA_D;
+	isa2hwcap['c' - 'a'] = COMPAT_HWCAP_ISA_C;
+	isa2hwcap['v' - 'a'] = COMPAT_HWCAP_ISA_V;
 
 	elf_hwcap = 0;
 
@@ -196,12 +225,15 @@ void __init riscv_fill_hwcap(void)
 			if (unlikely(ext_err))
 				continue;
 			if (!ext_long) {
-				this_hwcap |= isa2hwcap[(unsigned char)(*ext)];
-				set_bit(*ext - 'a', this_isa);
+				int nr = *ext - 'a';
+				this_hwcap |= isa2hwcap[nr];
+				set_bit(nr, this_isa);
 			} else {
 				SET_ISA_EXT_MAP("sscofpmf", RISCV_ISA_EXT_SSCOFPMF);
 				SET_ISA_EXT_MAP("svpbmt", RISCV_ISA_EXT_SVPBMT);
 				SET_ISA_EXT_MAP("zicbom", RISCV_ISA_EXT_ZICBOM);
+				SET_ISA_EXT_MAP("zicboz", RISCV_ISA_EXT_ZICBOZ);
+				SET_ISA_EXT_MAP("zicbop", RISCV_ISA_EXT_ZICBOP);
 				SET_ISA_EXT_MAP("zihintpause", RISCV_ISA_EXT_ZIHINTPAUSE);
 				SET_ISA_EXT_MAP("sstc", RISCV_ISA_EXT_SSTC);
 				SET_ISA_EXT_MAP("svinval", RISCV_ISA_EXT_SVINVAL);
@@ -232,6 +264,17 @@ void __init riscv_fill_hwcap(void)
 		elf_hwcap &= ~COMPAT_HWCAP_ISA_F;
 	}
 
+	if (elf_hwcap & COMPAT_HWCAP_ISA_V) {
+		riscv_v_setup_vsize();
+		/*
+		 * ISA string in device tree might have 'v' flag, but
+		 * CONFIG_RISCV_ISA_V is disabled in kernel.
+		 * Clear V flag in elf_hwcap if CONFIG_RISCV_ISA_V is disabled.
+		 */
+		if (!IS_ENABLED(CONFIG_RISCV_ISA_V))
+			elf_hwcap &= ~COMPAT_HWCAP_ISA_V;
+	}
+
 	memset(print_str, 0, sizeof(print_str));
 	for (i = 0, j = 0; i < NUM_ALPHA_EXTS; i++)
 		if (riscv_isa[0] & BIT_MASK(i))
@@ -249,6 +292,15 @@ void __init riscv_fill_hwcap(void)
 		if (j >= 0)
 			static_branch_enable(&riscv_isa_ext_keys[j]);
 	}
+}
+
+void riscv_user_isa_enable(void)
+{
+	if (riscv_isa_extension_available(NULL, ZICBOZ))
+		csr_set(CSR_SENVCFG, ENVCFG_CBZE);
+
+	if (riscv_isa_extension_available(NULL, ZICBOM))
+		csr_set(CSR_SENVCFG, ENVCFG_CBCFE | (ENVCFG_CBIE_FLUSH << ENVCFG_CBIE_SHIFT));
 }
 
 #ifdef CONFIG_RISCV_ALTERNATIVE
@@ -278,6 +330,35 @@ static bool __init_or_module cpufeature_probe_zicbom(unsigned int stage)
 	return true;
 }
 
+static bool __init_or_module cpufeature_probe_zicboz(unsigned int stage)
+{
+	if (!IS_ENABLED(CONFIG_RISCV_ISA_ZICBOZ))
+		return false;
+
+	if (stage == RISCV_ALTERNATIVES_EARLY_BOOT)
+		return false;
+
+	if (!riscv_isa_extension_available(NULL, ZICBOZ))
+		return false;
+
+	return true;
+}
+
+static bool __init_or_module cpufeature_probe_zicbop(unsigned int stage)
+{
+	if (!IS_ENABLED(CONFIG_RISCV_ISA_ZICBOP))
+		return false;
+
+	if (stage == RISCV_ALTERNATIVES_EARLY_BOOT)
+		return false;
+
+	if (!riscv_isa_extension_available(NULL, ZICBOP))
+		return false;
+
+	return true;
+}
+
+
 /*
  * Probe presence of individual extensions.
  *
@@ -294,6 +375,12 @@ static u32 __init_or_module cpufeature_probe(unsigned int stage)
 
 	if (cpufeature_probe_zicbom(stage))
 		cpu_req_feature |= BIT(CPUFEATURE_ZICBOM);
+
+	if (cpufeature_probe_zicboz(stage))
+		cpu_req_feature |= BIT(CPUFEATURE_ZICBOZ);
+
+	if (cpufeature_probe_zicbop(stage))
+		cpu_req_feature |= BIT(CPUFEATURE_ZICBOP);
 
 	return cpu_req_feature;
 }
