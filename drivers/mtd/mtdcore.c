@@ -28,9 +28,11 @@
 #include <linux/leds.h>
 #include <linux/debugfs.h>
 #include <linux/nvmem-provider.h>
+#include <linux/root_dev.h>
 
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/partitions.h>
+#include <linux/mtd/blktrans.h>
 
 #include "mtdcore.h"
 
@@ -167,6 +169,15 @@ static ssize_t mtd_erasesize_show(struct device *dev,
 	return sysfs_emit(buf, "%lu\n", (unsigned long)mtd->erasesize);
 }
 MTD_DEVICE_ATTR_RO(erasesize);
+
+static ssize_t mtd_erasesize_minor_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct mtd_info *mtd = dev_get_drvdata(dev);
+
+	return sysfs_emit(buf, "%lu\n", (unsigned long)mtd->erasesize_minor);
+}
+MTD_DEVICE_ATTR_RO(erasesize_minor);
 
 static ssize_t mtd_writesize_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -313,6 +324,7 @@ static struct attribute *mtd_attrs[] = {
 	&dev_attr_flags.attr,
 	&dev_attr_size.attr,
 	&dev_attr_erasesize.attr,
+	&dev_attr_erasesize_minor.attr,
 	&dev_attr_writesize.attr,
 	&dev_attr_subpagesize.attr,
 	&dev_attr_oobsize.attr,
@@ -518,10 +530,34 @@ static int mtd_nvmem_add(struct mtd_info *mtd)
 	struct device_node *node = mtd_get_of_node(mtd);
 	struct nvmem_config config = {};
 
+	/*
+	 * Do NOT register NVMEM device for any partition that is meant to be
+	 * handled by a U-Boot env driver. That would result in associating two
+	 * different NVMEM devices with the same OF node.
+	 *
+	 * An example of unwanted behaviour of above (forwardtrace):
+	 * of_get_mac_addr_nvmem()
+	 * of_nvmem_cell_get()
+	 * __nvmem_device_get()
+	 *
+	 * We can't have __nvmem_device_get() return "mtdX" NVMEM device instead
+	 * of U-Boot env NVMEM device. That would result in failing to find
+	 * NVMEM cell.
+	 *
+	 * This issue seems to affect U-Boot env case only and will go away with
+	 * switch to NVMEM layouts.
+	 */
+	if (of_device_is_compatible(node, "u-boot,env") ||
+	    of_device_is_compatible(node, "u-boot,env-redundant-bool") ||
+	    of_device_is_compatible(node, "u-boot,env-redundant-count") ||
+	    of_device_is_compatible(node, "brcm,env"))
+		return 0;
+
 	config.id = -1;
 	config.dev = &mtd->dev;
 	config.name = dev_name(&mtd->dev);
 	config.owner = THIS_MODULE;
+	config.add_legacy_fixed_of_cells = of_device_is_compatible(node, "nvmem-cells");
 	config.reg_read = mtd_nvmem_reg_read;
 	config.size = mtd->size;
 	config.word_size = 1;
@@ -529,7 +565,6 @@ static int mtd_nvmem_add(struct mtd_info *mtd)
 	config.read_only = true;
 	config.root_only = true;
 	config.ignore_wp = true;
-	config.no_of_node = !of_device_is_compatible(node, "nvmem-cells");
 	config.priv = mtd;
 
 	mtd->nvmem = nvmem_register(&config);
@@ -551,22 +586,22 @@ static void mtd_check_of_node(struct mtd_info *mtd)
 	struct device_node *partitions, *parent_dn, *mtd_dn = NULL;
 	const char *pname, *prefix = "partition-";
 	int plen, mtd_name_len, offset, prefix_len;
-	struct mtd_info *parent;
-	bool found = false;
 
 	/* Check if MTD already has a device node */
-	if (dev_of_node(&mtd->dev))
+	if (mtd_get_of_node(mtd))
 		return;
 
-	/* Check if a partitions node exist */
 	if (!mtd_is_partition(mtd))
 		return;
-	parent = mtd->parent;
-	parent_dn = of_node_get(dev_of_node(&parent->dev));
+
+	parent_dn = of_node_get(mtd_get_of_node(mtd->parent));
 	if (!parent_dn)
 		return;
 
-	partitions = of_get_child_by_name(parent_dn, "partitions");
+	if (mtd_is_partition(mtd->parent))
+		partitions = of_node_get(parent_dn);
+	else
+		partitions = of_get_child_by_name(parent_dn, "partitions");
 	if (!partitions)
 		goto exit_parent;
 
@@ -575,34 +610,26 @@ static void mtd_check_of_node(struct mtd_info *mtd)
 
 	/* Search if a partition is defined with the same name */
 	for_each_child_of_node(partitions, mtd_dn) {
-		offset = 0;
-
 		/* Skip partition with no/wrong prefix */
-		if (!of_node_name_prefix(mtd_dn, "partition-"))
+		if (!of_node_name_prefix(mtd_dn, prefix))
 			continue;
 
 		/* Label have priority. Check that first */
-		if (of_property_read_string(mtd_dn, "label", &pname)) {
-			of_property_read_string(mtd_dn, "name", &pname);
+		if (!of_property_read_string(mtd_dn, "label", &pname)) {
+			offset = 0;
+		} else {
+			pname = mtd_dn->name;
 			offset = prefix_len;
 		}
 
 		plen = strlen(pname) - offset;
 		if (plen == mtd_name_len &&
 		    !strncmp(mtd->name, pname + offset, plen)) {
-			found = true;
+			mtd_set_of_node(mtd, mtd_dn);
 			break;
 		}
 	}
 
-	if (!found)
-		goto exit_partitions;
-
-	/* Set of_node only for nvmem */
-	if (of_device_is_compatible(mtd_dn, "nvmem-cells"))
-		mtd_set_of_node(mtd, mtd_dn);
-
-exit_partitions:
 	of_node_put(partitions);
 exit_parent:
 	of_node_put(parent_dn);
@@ -745,6 +772,18 @@ int add_mtd_device(struct mtd_info *mtd)
 		not->add(mtd);
 
 	mutex_unlock(&mtd_table_mutex);
+
+	if (of_find_property(mtd_get_of_node(mtd), "linux,rootfs", NULL) ||
+	    (IS_ENABLED(CONFIG_MTD_ROOTFS_ROOT_DEV) && !strcmp(mtd->name, "rootfs") && ROOT_DEV == 0)) {
+		if (IS_BUILTIN(CONFIG_MTD)) {
+			pr_info("mtd: setting mtd%d (%s) as root device\n", mtd->index, mtd->name);
+			ROOT_DEV = MKDEV(MTD_BLOCK_MAJOR, mtd->index);
+		} else {
+			pr_warn("mtd: can't set mtd%d (%s) as root device - mtd must be builtin\n",
+				mtd->index, mtd->name);
+		}
+	}
+
 	/* We _know_ we aren't being removed, because
 	   our caller is still holding us here. So none
 	   of this try_ nonsense, and no bitching about it
@@ -887,6 +926,7 @@ static struct nvmem_device *mtd_otp_nvmem_register(struct mtd_info *mtd,
 	config.name = compatible;
 	config.id = NVMEM_DEVID_AUTO;
 	config.owner = THIS_MODULE;
+	config.add_legacy_fixed_of_cells = true;
 	config.type = NVMEM_TYPE_OTP;
 	config.root_only = true;
 	config.ignore_wp = true;
@@ -949,8 +989,8 @@ static int mtd_otp_nvmem_add(struct mtd_info *mtd)
 			nvmem = mtd_otp_nvmem_register(mtd, "user-otp", size,
 						       mtd_nvmem_user_otp_reg_read);
 			if (IS_ERR(nvmem)) {
-				dev_err(dev, "Failed to register OTP NVMEM device\n");
-				return PTR_ERR(nvmem);
+				err = PTR_ERR(nvmem);
+				goto err;
 			}
 			mtd->otp_user_nvmem = nvmem;
 		}
@@ -967,7 +1007,6 @@ static int mtd_otp_nvmem_add(struct mtd_info *mtd)
 			nvmem = mtd_otp_nvmem_register(mtd, "factory-otp", size,
 						       mtd_nvmem_fact_otp_reg_read);
 			if (IS_ERR(nvmem)) {
-				dev_err(dev, "Failed to register OTP NVMEM device\n");
 				err = PTR_ERR(nvmem);
 				goto err;
 			}
@@ -979,7 +1018,7 @@ static int mtd_otp_nvmem_add(struct mtd_info *mtd)
 
 err:
 	nvmem_unregister(mtd->otp_user_nvmem);
-	return err;
+	return dev_err_probe(dev, err, "Failed to register OTP NVMEM device\n");
 }
 
 /**
@@ -1060,6 +1099,8 @@ int mtd_device_parse_register(struct mtd_info *mtd, const char * const *types,
 		mtd->reboot_notifier.notifier_call = mtd_reboot_notifier;
 		register_reboot_notifier(&mtd->reboot_notifier);
 	}
+
+	register_mtd_blktrans_devs();
 
 out:
 	if (ret) {

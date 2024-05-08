@@ -1164,11 +1164,12 @@ static int add_ignore_alternatives(struct objtool_file *file)
 	return 0;
 }
 
+#ifndef BUILD_ORC
 /*
  * Symbols that replace INSN_CALL_DYNAMIC, every (tail) call to such a symbol
  * will be added to the .retpoline_sites section.
  */
-__weak bool arch_is_retpoline(struct symbol *sym)
+bool arch_is_retpoline(struct symbol *sym)
 {
 	return false;
 }
@@ -1177,7 +1178,7 @@ __weak bool arch_is_retpoline(struct symbol *sym)
  * Symbols that replace INSN_RETURN, every (tail) call to such a symbol
  * will be added to the .return_sites section.
  */
-__weak bool arch_is_rethunk(struct symbol *sym)
+bool arch_is_rethunk(struct symbol *sym)
 {
 	return false;
 }
@@ -1186,10 +1187,11 @@ __weak bool arch_is_rethunk(struct symbol *sym)
  * Symbols that are embedded inside other instructions, because sometimes crazy
  * code exists. These are mostly ignored for validation purposes.
  */
-__weak bool arch_is_embedded_insn(struct symbol *sym)
+bool arch_is_embedded_insn(struct symbol *sym)
 {
 	return false;
 }
+#endif
 
 #define NEGATIVE_RELOC	((void *)-1L)
 

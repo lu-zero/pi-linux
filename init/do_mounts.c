@@ -446,7 +446,30 @@ retry:
 out:
 	put_page(page);
 }
- 
+
+#ifdef CONFIG_MTD_ROOTFS_ROOT_DEV
+static int __init mount_ubi_rootfs(void)
+{
+	int flags = MS_SILENT;
+	int err, tried = 0;
+
+	while (tried < 2) {
+		err = do_mount_root("ubi0:rootfs", "ubifs", flags, \
+					root_mount_data);
+		switch (err) {
+			case -EACCES:
+				flags |= MS_RDONLY;
+				tried++;
+				break;
+			default:
+				return err;
+		}
+	}
+
+	return -EINVAL;
+}
+#endif
+
 #ifdef CONFIG_ROOT_NFS
 
 #define NFSROOT_TIMEOUT_MIN	5
@@ -579,6 +602,10 @@ void __init mount_root(void)
 		return;
 	}
 #endif
+#ifdef CONFIG_MTD_ROOTFS_ROOT_DEV
+	if (!mount_ubi_rootfs())
+		return;
+#endif
 	if (ROOT_DEV == 0 && root_device_name && root_fs_names) {
 		if (mount_nodev_root() == 0)
 			return;
@@ -618,7 +645,8 @@ void __init prepare_namespace(void)
 
 	if (saved_root_name[0]) {
 		root_device_name = saved_root_name;
-		if (!strncmp(root_device_name, "mtd", 3) ||
+		if (!strncmp(root_device_name, "fit", 3) ||
+		    !strncmp(root_device_name, "mtd", 3) ||
 		    !strncmp(root_device_name, "ubi", 3)) {
 			mount_block_root(root_device_name, root_mountflags);
 			goto out;

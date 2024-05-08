@@ -12928,6 +12928,23 @@ L:	netdev@vger.kernel.org
 S:	Maintained
 F:	drivers/net/ethernet/mediatek/
 
+MEDIATEK ETHERNET PCS DRIVER
+M:	Alexander Couzens <lynxis@fe80.eu>
+M:	Daniel Golle <daniel@makrotopia.org>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	drivers/net/pcs/pcs-mtk-lynxi.c
+F:	include/linux/pcs/pcs-mtk-lynxi.h
+
+MEDIATEK ETHERNET PHY DRIVERS
+M:	Daniel Golle <daniel@makrotopia.org>
+M:	Qingfang Deng <dqfext@gmail.com>
+M:	SkyLake Huang <SkyLake.Huang@mediatek.com>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	drivers/net/phy/mediatek-ge-soc.c
+F:	drivers/net/phy/mediatek-ge.c
+
 MEDIATEK I2C CONTROLLER DRIVER
 M:	Qii Wang <qii.wang@mediatek.com>
 L:	linux-i2c@vger.kernel.org
@@ -13052,8 +13069,11 @@ MEDIATEK SWITCH DRIVER
 M:	Sean Wang <sean.wang@mediatek.com>
 M:	Landen Chao <Landen.Chao@mediatek.com>
 M:	DENG Qingfang <dqfext@gmail.com>
+M:	Daniel Golle <daniel@makrotopia.org>
 L:	netdev@vger.kernel.org
 S:	Maintained
+F:	drivers/net/dsa/mt7530-mdio.c
+F:	drivers/net/dsa/mt7530-mmio.c
 F:	drivers/net/dsa/mt7530.*
 F:	net/dsa/tag_mtk.c
 
@@ -13953,6 +13973,7 @@ F:	include/uapi/linux/meye.h
 
 MOTORCOMM PHY DRIVER
 M:	Peter Geis <pgwipeout@gmail.com>
+M:	Frank <Frank.Sae@motor-comm.com>
 L:	netdev@vger.kernel.org
 S:	Maintained
 F:	drivers/net/phy/motorcomm.c
@@ -21039,6 +21060,12 @@ F:	Documentation/ABI/testing/sysfs-fs-ubifs
 F:	Documentation/filesystems/ubifs-authentication.rst
 F:	Documentation/filesystems/ubifs.rst
 F:	fs/ubifs/
+
+U-BOOT UIMAGE.FIT PARSER
+M:	Daniel Golle <daniel@makrotopia.org>
+L:	linux-block@vger.kernel.org
+S:	Maintained
+F:	drivers/block/fitblk.c
 
 UBLK USERSPACE BLOCK DRIVER
 M:	Ming Lei <ming.lei@redhat.com>

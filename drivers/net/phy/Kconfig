@@ -44,6 +44,14 @@ config LED_TRIGGER_PHY
 		<Speed in megabits>Mbps OR <Speed in gigabits>Gbps OR link
 		for any speed known to the PHY.
 
+config PHYLIB_LEDS
+	bool "Support probing LEDs from device tree"
+	depends on LEDS_CLASS=y || LEDS_CLASS=PHYLIB
+	depends on OF
+	default y
+	help
+	  When LED class support is enabled, phylib can automatically
+	  probe LED setting from device tree.
 
 config FIXED_PHY
 	tristate "MDIO Bus/PHY emulation with fixed speed/link PHYs"
@@ -61,12 +69,86 @@ config SFP
 	depends on HWMON || HWMON=n
 	select MDIO_I2C
 
+comment "Switch configuration API + drivers"
+
+config SWCONFIG
+	tristate "Switch configuration API"
+	help
+	  Switch configuration API using netlink. This allows
+	  you to configure the VLAN features of certain switches.
+
+config SWCONFIG_LEDS
+	bool "Switch LED trigger support"
+	depends on (SWCONFIG && LEDS_TRIGGERS)
+
+config ADM6996_PHY
+	tristate "Driver for ADM6996 switches"
+	select SWCONFIG
+	help
+	  Currently supports the ADM6996FC and ADM6996M switches.
+	  Support for FC is very limited.
+
+config AR8216_PHY
+	tristate "Driver for Atheros AR8216/8327 switches"
+	select SWCONFIG
+	select ETHERNET_PACKET_MANGLE
+
+config AR8216_PHY_LEDS
+	bool "Atheros AR8216 switch LED support"
+	depends on (AR8216_PHY && LEDS_CLASS)
+
+source "drivers/net/phy/b53/Kconfig"
+
+config IP17XX_PHY
+	tristate "Driver for IC+ IP17xx switches"
+	select SWCONFIG
+
+config PSB6970_PHY
+	tristate "Lantiq XWAY Tantos (PSB6970) Ethernet switch"
+	select SWCONFIG
+
+config RTL8306_PHY
+	tristate "Driver for Realtek RTL8306S switches"
+	select SWCONFIG
+
+config RTL8366_SMI
+	tristate "Driver for the RTL8366 SMI interface"
+	depends on GPIOLIB
+	help
+	  This module implements the SMI interface protocol which is used
+	  by some RTL8366 ethernet switch devices via the generic GPIO API.
+
+if RTL8366_SMI
+
+config RTL8366_SMI_DEBUG_FS
+	bool "RTL8366 SMI interface debugfs support"
+        depends on DEBUG_FS
+        default n
+
+config RTL8366S_PHY
+	tristate "Driver for the Realtek RTL8366S switch"
+	select SWCONFIG
+
+config RTL8366RB_PHY
+	tristate "Driver for the Realtek RTL8366RB switch"
+	select SWCONFIG
+
+config RTL8367_PHY
+	tristate "Driver for the Realtek RTL8367R/M switches"
+	select SWCONFIG
+
+config RTL8367B_PHY
+	tristate "Driver fot the Realtek RTL8367R-VB switch"
+	select SWCONFIG
+
+endif # RTL8366_SMI
+
 comment "MII PHY device drivers"
 
 config AMD_PHY
-	tristate "AMD PHYs"
+	tristate "AMD and Altima PHYs"
 	help
-	  Currently supports the am79c874
+	  Currently supports the AMD am79c874 and Altima AC101L.
 
 config MESON_GXL_PHY
 	tristate "Amlogic Meson GXL Internal PHY"
@@ -90,10 +172,7 @@ config ADIN1100_PHY
 	  Currently supports the:
 	  - ADIN1100 - Robust,Industrial, Low Power 10BASE-T1L Ethernet PHY
 
-config AQUANTIA_PHY
-	tristate "Aquantia PHYs"
-	help
-	  Currently supports the Aquantia AQ1202, AQ2104, AQR105, AQR405
+source "drivers/net/phy/aquantia/Kconfig"
 
 config AX88796B_PHY
 	tristate "Asix PHYs"
@@ -232,6 +311,25 @@ config MEDIATEK_GE_PHY
 	help
 	  Supports the MediaTek Gigabit Ethernet PHYs.
 
+config MEDIATEK_GE_SOC_PHY
+	tristate "MediaTek SoC Ethernet PHYs"
+	depends on (ARM64 && ARCH_MEDIATEK) || COMPILE_TEST
+	select NVMEM_MTK_EFUSE
+	help
+	  Supports MediaTek SoC built-in Gigabit Ethernet PHYs.
+
+	  Include support for built-in Ethernet PHYs which are present in
+	  the MT7981 and MT7988 SoCs. These PHYs need calibration data
+	  present in the SoCs efuse and will dynamically calibrate VCM
+	  (common-mode voltage) during startup.
+
+config MEDIATEK_2P5G_PHY
+	tristate "MediaTek 2.5G Ethernet PHY"
+	depends on (ARCH_MEDIATEK && ARM64) || COMPILE_TEST
+	default NET_MEDIATEK_SOC
+	help
+	  Supports the MediaTek 2.5G Ethernet PHY.
+
 config MICREL_PHY
 	tristate "Micrel PHYs"
 	depends on PTP_1588_CLOCK_OPTIONAL
@@ -260,7 +358,7 @@ config MOTORCOMM_PHY
 	tristate "Motorcomm PHYs"
 	help
 	  Enables support for Motorcomm network PHYs.
-	  Currently supports the YT8511 gigabit PHY.
+	  Currently supports YT85xx Gigabit Ethernet PHYs.
 
 config NATIONAL_PHY
 	tristate "National Semiconductor PHYs"
@@ -306,6 +404,12 @@ config ROCKCHIP_PHY
 	tristate "Rockchip Ethernet PHYs"
 	help
 	  Currently supports the integrated Ethernet PHY.
+
+config RTL8367S_GSW
+	tristate "rtl8367 Gigabit Switch support for mt7622"
+	depends on NET_VENDOR_MEDIATEK
+	help
+	  This driver supports rtl8367s in mt7622
 
 config SMSC_PHY
 	tristate "SMSC PHYs"

@@ -15,12 +15,14 @@
 	return ENOSYS;							\
 })
 
-int __weak orc_dump(const char *_objname)
+#ifndef BUILD_ORC
+int orc_dump(const char *_objname)
 {
 	UNSUPPORTED("ORC");
 }
 
-int __weak orc_create(struct objtool_file *file)
+int orc_create(struct objtool_file *file)
 {
 	UNSUPPORTED("ORC");
 }
+#endif

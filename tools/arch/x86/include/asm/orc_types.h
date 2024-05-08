@@ -40,7 +40,6 @@
 #define ORC_REG_MAX			15
 
 #ifndef __ASSEMBLY__
-#include <asm/byteorder.h>
 
 /*
  * This struct is more or less a vastly simplified version of the DWARF Call
@@ -53,12 +52,12 @@
 struct orc_entry {
 	s16		sp_offset;
 	s16		bp_offset;
-#if defined(__LITTLE_ENDIAN_BITFIELD)
+#if __BYTE_ORDER == __LITTLE_ENDIAN
 	unsigned	sp_reg:4;
 	unsigned	bp_reg:4;
 	unsigned	type:2;
 	unsigned	end:1;
-#elif defined(__BIG_ENDIAN_BITFIELD)
+#elif __BYTE_ORDER == __BIG_ENDIAN
 	unsigned	bp_reg:4;
 	unsigned	sp_reg:4;
 	unsigned	unused:5;

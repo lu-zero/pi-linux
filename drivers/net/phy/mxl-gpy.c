@@ -10,6 +10,7 @@
 #include <linux/bitfield.h>
 #include <linux/hwmon.h>
 #include <linux/mutex.h>
+#include <linux/of.h>
 #include <linux/phy.h>
 #include <linux/polynomial.h>
 #include <linux/netdevice.h>
@@ -33,6 +34,7 @@
 #define PHY_MIISTAT		0x18	/* MII state */
 #define PHY_IMASK		0x19	/* interrupt mask */
 #define PHY_ISTAT		0x1A	/* interrupt status */
+#define PHY_LED			0x1B	/* LED control */
 #define PHY_FWV			0x1E	/* firmware version */
 
 #define PHY_MIISTAT_SPD_MASK	GENMASK(2, 0)
@@ -56,9 +58,14 @@
 				 PHY_IMASK_ADSC | \
 				 PHY_IMASK_ANC)
 
+#define PHY_LED_NUM_LEDS	4
+
 #define PHY_FWV_REL_MASK	BIT(15)
 #define PHY_FWV_MAJOR_MASK	GENMASK(11, 8)
 #define PHY_FWV_MINOR_MASK	GENMASK(7, 0)
+
+/* LED */
+#define VSPEC1_LED(x)		(0x1 + x)
 
 /* SGMII */
 #define VSPEC1_SGMII_CTRL	0x08
@@ -241,6 +248,35 @@ out:
 	return ret;
 }
 
+static int gpy_led_write(struct phy_device *phydev)
+{
+	struct device_node *node = phydev->mdio.dev.of_node;
+	u32 led_regs[PHY_LED_NUM_LEDS];
+	int i, ret;
+	u16 val = 0xff00;
+
+	if (!IS_ENABLED(CONFIG_OF_MDIO))
+		return 0;
+
+	if (of_property_read_u32_array(node, "mxl,led-config", led_regs, PHY_LED_NUM_LEDS))
+		return 0;
+
+	if (of_property_read_bool(node, "mxl,led-drive-vdd"))
+		val &= 0x0fff;
+
+	/* Enable LED function handling on all ports*/
+	phy_write(phydev, PHY_LED, val);
+
+	/* Write LED register values */
+	for (i = 0; i < PHY_LED_NUM_LEDS; i++) {
+		ret = phy_write_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_LED(i), (u16)led_regs[i]);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int gpy_config_init(struct phy_device *phydev)
 {
 	int ret;
@@ -252,7 +288,10 @@ static int gpy_config_init(struct phy_device *phydev)
 
 	/* Clear all pending interrupts */
 	ret = phy_read(phydev, PHY_ISTAT);
-	return ret < 0 ? ret : 0;
+	if (ret < 0)
+		return ret;
+
+	return gpy_led_write(phydev);
 }
 
 static bool gpy_has_broken_mdint(struct phy_device *phydev)
@@ -332,8 +371,11 @@ static bool gpy_2500basex_chk(struct phy_device *phydev)
 
 	phydev->speed = SPEED_2500;
 	phydev->interface = PHY_INTERFACE_MODE_2500BASEX;
-	phy_modify_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_SGMII_CTRL,
-		       VSPEC1_SGMII_CTRL_ANEN, 0);
+
+	if (!phydev->phylink)
+		phy_modify_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_SGMII_CTRL,
+			       VSPEC1_SGMII_CTRL_ANEN, 0);
+
 	return true;
 }
 
@@ -356,6 +398,14 @@ static int gpy_config_aneg(struct phy_device *phydev)
 	bool changed = false;
 	u32 adv;
 	int ret;
+
+	/* Disable SGMII auto-negotiation if using phylink */
+	if (phydev->phylink) {
+		ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_SGMII_CTRL,
+				     VSPEC1_SGMII_CTRL_ANEN, 0);
+		if (ret < 0)
+			return ret;
+	}
 
 	if (phydev->autoneg == AUTONEG_DISABLE) {
 		/* Configure half duplex with genphy_setup_forced,
@@ -447,6 +497,8 @@ static void gpy_update_interface(struct phy_device *phydev)
 	switch (phydev->speed) {
 	case SPEED_2500:
 		phydev->interface = PHY_INTERFACE_MODE_2500BASEX;
+		if (phydev->phylink)
+			break;
 		ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_SGMII_CTRL,
 				     VSPEC1_SGMII_CTRL_ANEN, 0);
 		if (ret < 0)
@@ -458,7 +510,7 @@ static void gpy_update_interface(struct phy_device *phydev)
 	case SPEED_100:
 	case SPEED_10:
 		phydev->interface = PHY_INTERFACE_MODE_SGMII;
-		if (gpy_sgmii_aneg_en(phydev))
+		if (phydev->phylink || gpy_sgmii_aneg_en(phydev))
 			break;
 		/* Enable and restart SGMII ANEG for 10/100/1000Mbps link speed
 		 * if ANEG is disabled (in 2500-BaseX mode).

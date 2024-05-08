@@ -1050,6 +1050,8 @@ static u8 spi_nor_convert_3to4_erase(u8 opcode)
 
 static bool spi_nor_has_uniform_erase(const struct spi_nor *nor)
 {
+	if (IS_ENABLED(CONFIG_MTD_SPI_NOR_USE_VARIABLE_ERASE))
+		return false;
 	return !!nor->params->erase_map.uniform_erase_type;
 }
 
@@ -1634,6 +1636,7 @@ static const struct spi_nor_manufacturer *manufacturers[] = {
 	&spi_nor_winbond,
 	&spi_nor_xilinx,
 	&spi_nor_xmc,
+	&spi_nor_xtx,
 };
 
 static const struct flash_info *spi_nor_match_id(struct spi_nor *nor,
@@ -2158,6 +2161,7 @@ static int spi_nor_select_erase(struct spi_nor *nor)
 {
 	struct spi_nor_erase_map *map = &nor->params->erase_map;
 	const struct spi_nor_erase_type *erase = NULL;
+	const struct spi_nor_erase_type *erase_minor = NULL;
 	struct mtd_info *mtd = &nor->mtd;
 	u32 wanted_size = nor->info->sector_size;
 	int i;
@@ -2190,8 +2194,9 @@ static int spi_nor_select_erase(struct spi_nor *nor)
 	 */
 	for (i = SNOR_ERASE_TYPE_MAX - 1; i >= 0; i--) {
 		if (map->erase_type[i].size) {
-			erase = &map->erase_type[i];
-			break;
+			if (!erase)
+				erase = &map->erase_type[i];
+			erase_minor = &map->erase_type[i];
 		}
 	}
 
@@ -2199,6 +2204,9 @@ static int spi_nor_select_erase(struct spi_nor *nor)
 		return -EINVAL;
 
 	mtd->erasesize = erase->size;
+	if (IS_ENABLED(CONFIG_MTD_SPI_NOR_USE_VARIABLE_ERASE) &&
+			erase_minor && erase_minor->size < erase->size)
+		mtd->erasesize_minor = erase_minor->size;
 	return 0;
 }
 
@@ -2892,6 +2900,18 @@ static const struct flash_info *spi_nor_match_name(struct spi_nor *nor,
 	return NULL;
 }
 
+static int spi_nor_cal_read(void *priv, u32 *addr, int addrlen, u8 *buf, int readlen)
+{
+	struct spi_nor *nor = (struct spi_nor *)priv;
+
+	nor->reg_proto = SNOR_PROTO_1_1_1;
+	nor->read_proto = SNOR_PROTO_1_1_1;
+	nor->read_opcode = SPINOR_OP_READ;
+	nor->read_dummy = 0;
+
+	return nor->controller_ops->read(nor, *addr, readlen, buf);
+}
+
 static const struct flash_info *spi_nor_get_flash_info(struct spi_nor *nor,
 						       const char *name)
 {
@@ -2994,6 +3014,9 @@ int spi_nor_scan(struct spi_nor *nor, const char *name,
 				      GFP_KERNEL);
 	if (!nor->bouncebuf)
 		return -ENOMEM;
+
+	if(nor->spimem)
+		spi_mem_do_calibration(nor->spimem, spi_nor_cal_read, nor);
 
 	info = spi_nor_get_flash_info(nor, name);
 	if (IS_ERR(info))

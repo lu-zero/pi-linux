@@ -92,7 +92,7 @@ LLVM_OBJCOPY	?= llvm-objcopy
 LLVM_STRIP	?= llvm-strip
 
 ifeq ($(CC_NO_CLANG), 1)
-EXTRA_WARNINGS += -Wstrict-aliasing=3
+# EXTRA_WARNINGS += -Wstrict-aliasing=3
 
 else ifneq ($(CROSS_COMPILE),)
 # Allow userspace to override CLANG_CROSS_FLAGS to specify their own

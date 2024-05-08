@@ -4,7 +4,7 @@ include ../scripts/Makefile.arch
 
 # always use the host compiler
 AR	 = $(HOSTAR)
-CC	 = $(HOSTCC)
+CC	 = $(HOSTCC) $(HOST_EXTRACFLAGS)
 LD	 = $(HOSTLD)
 
 ifeq ($(srctree),)
@@ -43,6 +43,7 @@ BUILD_ORC := n
 
 ifeq ($(SRCARCH),x86)
 	BUILD_ORC := y
+	CFLAGS += -DBUILD_ORC
 endif
 
 export BUILD_ORC

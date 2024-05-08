@@ -23,11 +23,17 @@
 	cpu_opp_table: opp-table {
 		compatible = "operating-points-v2";
 		opp-shared;
-		opp-300000000 {
-			opp-hz = /bits/ 64 <30000000>;
-			opp-microvolt = <950000>;
-		};
-
+		/* Due to the bug described at the link below, remove the 300 MHz clock to avoid a low
+		 * voltage condition that can cause a hang when rebooting the RT3200/E8450.
+		 *
+		 * https://forum.openwrt.org/t/belkin-rt3200-linksys-e8450-wifi-ax-discussion/94302/1490
+		 *
+		 * opp-300000000 {
+		 *	opp-hz = /bits/ 64 <300000000>;
+		 *	opp-microvolt = <950000>;
+		 * };
+		 *
+		 */
 		opp-437500000 {
 			opp-hz = /bits/ 64 <437500000>;
 			opp-microvolt = <1000000>;
@@ -133,6 +139,13 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
+
+		/* 64 KiB reserved for ramoops/pstore */
+		ramoops@42ff0000 {
+			compatible = "ramoops";
+			reg = <0 0x42ff0000 0 0x10000>;
+			record-size = <0x1000>;
+		};
 
 		/* 192 KiB reserved for ARM Trusted Firmware (BL31) */
 		secmon_reserved: secmon@43000000 {
@@ -339,7 +352,7 @@
 		#interrupt-cells = <3>;
 		interrupt-parent = <&gic>;
 		reg = <0 0x10310000 0 0x1000>,
-		      <0 0x10320000 0 0x1000>,
+		      <0 0x1032f000 0 0x2000>,
 		      <0 0x10340000 0 0x2000>,
 		      <0 0x10360000 0 0x2000>;
 	};
@@ -578,6 +591,7 @@
 		compatible = "mediatek,mt7622-nor",
 			     "mediatek,mt8173-nor";
 		reg = <0 0x11014000 0 0xe0>;
+		interrupts = <GIC_SPI 88 IRQ_TYPE_LEVEL_LOW>;
 		clocks = <&pericfg CLK_PERI_FLASH_PD>,
 			 <&topckgen CLK_TOP_FLASH_SEL>;
 		clock-names = "spi", "sf";
@@ -829,6 +843,9 @@
 		bus-range = <0x00 0xff>;
 		ranges = <0x82000000 0 0x20000000 0x0 0x20000000 0 0x8000000>;
 		status = "disabled";
+		dma-coherent;
+		mediatek,hifsys = <&hifsys>;
+		mediatek,cci-control = <&cci_control2>;
 
 		#interrupt-cells = <1>;
 		interrupt-map-mask = <0 0 0 7>;
@@ -840,6 +857,12 @@
 			interrupt-controller;
 			#address-cells = <0>;
 			#interrupt-cells = <1>;
+		};
+
+		slot0: pcie@0,0 {
+			reg = <0x0000 0 0 0 0>;
+			#address-cells = <3>;
+			#size-cells = <2>;
 		};
 	};
 
@@ -867,6 +890,9 @@
 		bus-range = <0x00 0xff>;
 		ranges = <0x82000000 0 0x28000000 0x0 0x28000000 0 0x8000000>;
 		status = "disabled";
+		dma-coherent;
+		mediatek,hifsys = <&hifsys>;
+		mediatek,cci-control = <&cci_control2>;
 
 		#interrupt-cells = <1>;
 		interrupt-map-mask = <0 0 0 7>;
@@ -878,6 +904,12 @@
 			interrupt-controller;
 			#address-cells = <0>;
 			#interrupt-cells = <1>;
+		};
+
+		slot1: pcie@1,0 {
+			reg = <0x0800 0 0 0 0>;
+			#address-cells = <3>;
+			#size-cells = <2>;
 		};
 	};
 

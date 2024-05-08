@@ -54,9 +54,11 @@ struct special_entry entries[] = {
 	{},
 };
 
-void __weak arch_handle_alternative(unsigned short feature, struct special_alt *alt)
+#ifndef BUILD_ORC
+void arch_handle_alternative(unsigned short feature, struct special_alt *alt)
 {
 }
+#endif
 
 static void reloc_to_sec_off(struct reloc *reloc, struct section **sec,
 			     unsigned long *off)

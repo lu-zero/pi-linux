@@ -10,6 +10,11 @@
 #include <linux/ctype.h>
 #include <linux/vmalloc.h>
 #include <linux/raid/detect.h>
+#include <linux/property.h>
+#ifdef CONFIG_FIT_PARTITION
+#include <linux/root_dev.h>
+#endif
+
 #include "check.h"
 
 static int (*check_part[])(struct parsed_partitions *) = {
@@ -45,6 +50,9 @@ static int (*check_part[])(struct parsed_partitions *) = {
 #endif
 #ifdef CONFIG_EFI_PARTITION
 	efi_partition,		/* this must come before msdos */
+#endif
+#ifdef CONFIG_FIT_PARTITION
+	fit_partition,
 #endif
 #ifdef CONFIG_SGI_PARTITION
 	sgi_partition,
@@ -298,6 +306,43 @@ static ssize_t whole_disk_show(struct device *dev,
 }
 static DEVICE_ATTR(whole_disk, 0444, whole_disk_show, NULL);
 
+static struct fwnode_handle *find_partition_fwnode(struct block_device *bdev)
+{
+	struct fwnode_handle *fw_parts, *fw_part;
+	struct device *ddev = disk_to_dev(bdev->bd_disk);
+	const char *partname, *uuid;
+	u32 partno;
+
+	fw_parts = device_get_named_child_node(ddev, "partitions");
+	if (!fw_parts)
+		fw_parts = device_get_named_child_node(ddev->parent, "partitions");
+
+	if (!fw_parts)
+		return NULL;
+
+	fwnode_for_each_child_node(fw_parts, fw_part) {
+		if (!fwnode_property_read_string(fw_part, "uuid", &uuid) &&
+		    (!bdev->bd_meta_info || strncmp(uuid,
+						    bdev->bd_meta_info->uuid,
+						    PARTITION_META_INFO_UUIDLTH)))
+			continue;
+
+		if (!fwnode_property_read_string(fw_part, "partname", &partname) &&
+		    (!bdev->bd_meta_info || strncmp(partname,
+						    bdev->bd_meta_info->volname,
+						    PARTITION_META_INFO_VOLNAMELTH)))
+			continue;
+
+		if (!fwnode_property_read_u32(fw_part, "partno", &partno) &&
+		    bdev->bd_partno != partno)
+			continue;
+
+		return fw_part;
+	}
+
+	return NULL;
+}
+
 /*
  * Must be called either with open_mutex held, before a disk can be opened or
  * after all disk users are gone.
@@ -380,6 +425,8 @@ static struct block_device *add_partition(struct gendisk *disk, int partno,
 			goto out_put;
 	}
 
+	device_set_node(pdev, find_partition_fwnode(bdev));
+
 	/* delay uevent until 'holders' subdir is created */
 	dev_set_uevent_suppress(pdev, 1);
 	err = device_add(pdev);
@@ -397,6 +444,11 @@ static struct block_device *add_partition(struct gendisk *disk, int partno,
 		if (err)
 			goto out_del;
 	}
+
+#ifdef CONFIG_FIT_PARTITION
+	if (flags & ADDPART_FLAG_READONLY)
+		bdev->bd_read_only = true;
+#endif
 
 	/* everything is up and running, commence */
 	err = xa_insert(&disk->part_tbl, partno, bdev, GFP_KERNEL);
@@ -584,6 +636,11 @@ static bool blk_add_partition(struct gendisk *disk,
 	if (IS_BUILTIN(CONFIG_BLK_DEV_MD) &&
 	    (state->parts[p].flags & ADDPART_FLAG_RAID))
 		md_autodetect_dev(part->bd_dev);
+
+#ifdef CONFIG_FIT_PARTITION
+	if ((state->parts[p].flags & ADDPART_FLAG_ROOTDEV) && ROOT_DEV == 0)
+		ROOT_DEV = part->bd_dev;
+#endif
 
 	return true;
 }

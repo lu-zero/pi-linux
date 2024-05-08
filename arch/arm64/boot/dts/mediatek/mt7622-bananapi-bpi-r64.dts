@@ -15,15 +15,21 @@
 
 / {
 	model = "Bananapi BPI-R64";
+	chassis-type = "embedded";
 	compatible = "bananapi,bpi-r64", "mediatek,mt7622";
 
 	aliases {
 		serial0 = &uart0;
+		ethernet0 = &gmac0;
+		led-boot = &led_system_green;
+		led-failsafe = &led_system_blue;
+		led-running = &led_system_green;
+		led-upgrade = &led_system_blue;
 	};
 
 	chosen {
 		stdout-path = "serial0:115200n8";
-		bootargs = "earlycon=uart8250,mmio32,0x11002000 swiotlb=512";
+		bootargs = "earlycon=uart8250,mmio32,0x11002000 console=ttyS0,115200n1 swiotlb=512";
 	};
 
 	cpus {
@@ -42,8 +48,8 @@
 		compatible = "gpio-keys";
 
 		factory-key {
-			label = "factory";
-			linux,code = <BTN_0>;
+			label = "reset";
+			linux,code = <KEY_RESTART>;
 			gpios = <&pio 0 GPIO_ACTIVE_HIGH>;
 		};
 
@@ -57,17 +63,17 @@
 	leds {
 		compatible = "gpio-leds";
 
-		led-0 {
+		led_system_green: led-0 {
 			label = "bpi-r64:pio:green";
 			color = <LED_COLOR_ID_GREEN>;
 			gpios = <&pio 89 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
 		};
 
-		led-1 {
-			label = "bpi-r64:pio:red";
-			color = <LED_COLOR_ID_RED>;
-			gpios = <&pio 88 GPIO_ACTIVE_HIGH>;
+		led_system_blue: led-1 {
+			label = "bpi-r64:pio:blue";
+			color = <LED_COLOR_ID_BLUE>;
+			gpios = <&pio 85 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
 		};
 	};
@@ -105,10 +111,6 @@
 
 &bch {
 	status = "disabled";
-};
-
-&btif {
-	status = "okay";
 };
 
 &cir {
@@ -150,6 +152,10 @@
 		switch@0 {
 			compatible = "mediatek,mt7531";
 			reg = <0>;
+			interrupt-controller;
+			#interrupt-cells = <1>;
+			interrupt-parent = <&pio>;
+			interrupts = <53 IRQ_TYPE_LEVEL_HIGH>;
 			reset-gpios = <&pio 54 0>;
 
 			ports {
@@ -163,22 +169,22 @@
 
 				port@1 {
 					reg = <1>;
-					label = "lan0";
+					label = "lan1";
 				};
 
 				port@2 {
 					reg = <2>;
-					label = "lan1";
+					label = "lan2";
 				};
 
 				port@3 {
 					reg = <3>;
-					label = "lan2";
+					label = "lan3";
 				};
 
 				port@4 {
 					reg = <4>;
-					label = "lan3";
+					label = "lan4";
 				};
 
 				port@6 {
@@ -249,14 +255,42 @@
 	status = "disabled";
 };
 
-&nor_flash {
-	pinctrl-names = "default";
-	pinctrl-0 = <&spi_nor_pins>;
-	status = "disabled";
+&bch {
+	status = "okay";
+};
 
+&snfi {
+	pinctrl-names = "default";
+	pinctrl-0 = <&serial_nand_pins>;
+	status = "okay";
 	flash@0 {
-		compatible = "jedec,spi-nor";
+		compatible = "spi-nand";
 		reg = <0>;
+		spi-tx-bus-width = <4>;
+		spi-rx-bus-width = <4>;
+		nand-ecc-engine = <&snfi>;
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "bl2";
+				reg = <0x0 0x80000>;
+				read-only;
+			};
+
+			partition@80000 {
+				label = "fip";
+				reg = <0x80000 0x200000>;
+				read-only;
+			};
+
+			partition@280000 {
+				label = "ubi";
+				reg = <0x280000 0x7d80000>;
+			};
+		};
 	};
 };
 
@@ -276,7 +310,7 @@
 	/* Attention: GPIO 90 is used to switch between PCIe@1,0 and
 	 * SATA functions. i.e. output-high: PCIe, output-low: SATA
 	 */
-	asm_sel {
+	asmsel: asm_sel {
 		gpio-hog;
 		gpios = <90 GPIO_ACTIVE_HIGH>;
 		output-high;
@@ -552,12 +586,16 @@
 	status = "okay";
 };
 
+&rtc {
+	status = "disabled";
+};
+
 &sata {
-	status = "disable";
+	status = "disabled";
 };
 
 &sata_phy {
-	status = "disable";
+	status = "disabled";
 };
 
 &spi0 {
@@ -599,5 +637,28 @@
 };
 
 &wmac {
+	mediatek,eeprom-data = <0x22760500	0x0		0x0		0x0
+				0x0		0x0		0x0		0x0
+				0x0		0x0		0x0		0x0
+				0x0		0x44000020	0x0		0x10002000
+				0x4400		0x4000000	0x0		0x0
+				0x200000b3	0x40b6c3c3	0x26000000	0x41c42600
+				0x41c4		0x26000000	0xc0c52600	0x0
+				0x0		0x0		0x0		0x0
+				0x0		0x0		0x0		0x0
+				0x0		0x0		0x0		0x0
+				0x0		0x0		0x0		0x0
+				0x0		0x0		0x0		0xc6c6
+				0xc3c3c2c1	0xc300c3	0x818181	0x83c1c182
+				0x83838382	0x0		0x0		0x0
+				0x0		0x0		0x0		0x0
+				0x84002e00	0x90000087	0x8a000000	0x0
+				0x0		0x0		0x0		0x0
+				0x0		0x0		0x0		0x0
+				0xb000009	0x0		0x0		0x0
+				0x0		0x0		0x0		0x0
+				0x0		0x0		0x0		0x0
+				0x0		0x0		0x0		0x7707>;
+
 	status = "okay";
 };

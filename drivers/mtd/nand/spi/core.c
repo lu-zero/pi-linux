@@ -19,6 +19,7 @@
 #include <linux/string.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/spi-mem.h>
+#include <linux/mtd/mtk_bmt.h>
 
 static int spinand_read_reg_op(struct spinand_device *spinand, u8 reg, u8 *val)
 {
@@ -724,7 +725,7 @@ static int spinand_mtd_write(struct mtd_info *mtd, loff_t to,
 static bool spinand_isbad(struct nand_device *nand, const struct nand_pos *pos)
 {
 	struct spinand_device *spinand = nand_to_spinand(nand);
-	u8 marker[2] = { };
+	u8 marker[1] = { };
 	struct nand_page_io_req req = {
 		.pos = *pos,
 		.ooblen = sizeof(marker),
@@ -735,7 +736,7 @@ static bool spinand_isbad(struct nand_device *nand, const struct nand_pos *pos)
 
 	spinand_select_target(spinand, pos->target);
 	spinand_read_page(spinand, &req);
-	if (marker[0] != 0xff || marker[1] != 0xff)
+	if (marker[0] != 0xff)
 		return true;
 
 	return false;
@@ -938,6 +939,9 @@ static const struct nand_ops spinand_ops = {
 
 static const struct spinand_manufacturer *spinand_manufacturers[] = {
 	&ato_spinand_manufacturer,
+	&esmt_c8_spinand_manufacturer,
+	&fidelix_spinand_manufacturer,
+	&etron_spinand_manufacturer,
 	&gigadevice_spinand_manufacturer,
 	&macronix_spinand_manufacturer,
 	&micron_spinand_manufacturer,
@@ -972,6 +976,59 @@ static int spinand_manufacturer_match(struct spinand_device *spinand,
 		return 0;
 	}
 	return -ENOTSUPP;
+}
+
+int spinand_cal_read(void *priv, u32 *addr, int addrlen, u8 *buf, int readlen) {
+	struct spinand_device *spinand = (struct spinand_device *)priv;
+	struct device *dev = &spinand->spimem->spi->dev;
+	struct spi_mem_op op = SPINAND_PAGE_READ_FROM_CACHE_OP(false, 0, 1, buf, readlen);
+	struct nand_pos pos;
+	struct nand_page_io_req req;
+	u8 status;
+	int ret;
+
+	if(addrlen != sizeof(struct nand_addr)/sizeof(unsigned int)) {
+		dev_err(dev, "Must provide correct addr(length) for spinand calibration\n");
+		return -EINVAL;
+	}
+
+	ret = spinand_reset_op(spinand);
+	if (ret)
+		return ret;
+
+	/* We should store our golden data in first target because
+	 * we can't switch target at this moment.
+	 */
+	pos = (struct nand_pos){
+		.target = 0,
+		.lun = *addr,
+		.plane = *(addr+1),
+		.eraseblock = *(addr+2),
+		.page = *(addr+3),
+	};
+
+	req = (struct nand_page_io_req){
+		.pos = pos,
+		.dataoffs = *(addr+4),
+		.datalen = readlen,
+		.databuf.in = buf,
+		.mode = MTD_OPS_AUTO_OOB,
+	};
+
+	ret = spinand_load_page_op(spinand, &req);
+	if (ret)
+		return ret;
+
+	ret = spinand_wait(spinand,
+			   SPINAND_READ_INITIAL_DELAY_US,
+			   SPINAND_READ_POLL_DELAY_US,
+			   &status);
+	if (ret < 0)
+		return ret;
+
+	ret = spi_mem_exec_op(spinand->spimem, &op);
+
+	return 0;
 }
 
 static int spinand_id_detect(struct spinand_device *spinand)
@@ -1224,6 +1281,10 @@ static int spinand_init(struct spinand_device *spinand)
 	if (!spinand->scratchbuf)
 		return -ENOMEM;
 
+	ret = spi_mem_do_calibration(spinand->spimem, spinand_cal_read, spinand);
+	if (ret)
+		dev_err(dev, "Failed to calibrate SPI-NAND (err = %d)\n", ret);
+
 	ret = spinand_detect(spinand);
 	if (ret)
 		goto err_free_bufs;
@@ -1342,6 +1403,7 @@ static int spinand_probe(struct spi_mem *mem)
 	if (ret)
 		return ret;
 
+	mtk_bmt_attach(mtd);
 	ret = mtd_device_register(mtd, NULL, 0);
 	if (ret)
 		goto err_spinand_cleanup;
@@ -1349,6 +1411,7 @@ static int spinand_probe(struct spi_mem *mem)
 	return 0;
 
 err_spinand_cleanup:
+	mtk_bmt_detach(mtd);
 	spinand_cleanup(spinand);
 
 	return ret;
@@ -1367,6 +1430,7 @@ static int spinand_remove(struct spi_mem *mem)
 	if (ret)
 		return ret;
 
+	mtk_bmt_detach(mtd);
 	spinand_cleanup(spinand);
 
 	return 0;

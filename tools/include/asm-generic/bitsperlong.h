@@ -4,10 +4,12 @@
 
 #include <uapi/asm-generic/bitsperlong.h>
 
+#ifndef BITS_PER_LONG
 #ifdef __SIZEOF_LONG__
 #define BITS_PER_LONG (__CHAR_BIT__ * __SIZEOF_LONG__)
 #else
 #define BITS_PER_LONG __WORDSIZE
+#endif
 #endif
 
 #if BITS_PER_LONG != __BITS_PER_LONG

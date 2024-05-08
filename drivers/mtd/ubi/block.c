@@ -33,6 +33,7 @@
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
+#include <linux/namei.h>
 #include <linux/slab.h>
 #include <linux/mtd/ubi.h>
 #include <linux/workqueue.h>
@@ -42,6 +43,7 @@
 #include <linux/scatterlist.h>
 #include <linux/idr.h>
 #include <asm/div64.h>
+#include <linux/root_dev.h>
 
 #include "ubi-media.h"
 #include "ubi.h"
@@ -67,10 +69,10 @@ struct ubiblock_pdu {
 };
 
 /* Numbers of elements set in the @ubiblock_param array */
-static int ubiblock_devs __initdata;
+static int ubiblock_devs;
 
 /* MTD devices specification parameters */
-static struct ubiblock_param ubiblock_param[UBIBLOCK_MAX_DEVICES] __initdata;
+static struct ubiblock_param ubiblock_param[UBIBLOCK_MAX_DEVICES];
 
 struct ubiblock {
 	struct ubi_volume_desc *desc;
@@ -430,7 +432,9 @@ int ubiblock_create(struct ubi_volume_info *vi)
 		ret = -ENODEV;
 		goto out_cleanup_disk;
 	}
-	gd->flags |= GENHD_FL_NO_PART;
+	if (!IS_ENABLED(CONFIG_FIT_PARTITION))
+		gd->flags |= GENHD_FL_NO_PART;
+
 	gd->private_data = dev;
 	sprintf(gd->disk_name, "ubiblock%d_%d", dev->ubi_num, dev->vol_id);
 	set_capacity(gd, disk_capacity);
@@ -452,13 +456,22 @@ int ubiblock_create(struct ubi_volume_info *vi)
 	list_add_tail(&dev->list, &ubiblock_devices);
 
 	/* Must be the last step: anyone can call file ops from now on */
-	ret = add_disk(dev->gd);
+	ret = device_add_disk(vi->dev, dev->gd, NULL);
 	if (ret)
 		goto out_destroy_wq;
 
 	dev_info(disk_to_dev(dev->gd), "created from ubi%d:%d(%s)",
 		 dev->ubi_num, dev->vol_id, vi->name);
 	mutex_unlock(&devices_mutex);
+
+	if (!strcmp(vi->name, "rootfs") &&
+	    IS_ENABLED(CONFIG_MTD_ROOTFS_ROOT_DEV) &&
+	    ROOT_DEV == 0) {
+		pr_notice("ubiblock: device ubiblock%d_%d (%s) set to be root filesystem\n",
+			  dev->ubi_num, dev->vol_id, vi->name);
+		ROOT_DEV = MKDEV(gd->major, gd->first_minor);
+	}
+
 	return 0;
 
 out_destroy_wq:
@@ -504,7 +517,7 @@ int ubiblock_remove(struct ubi_volume_info *vi)
 	}
 
 	/* Found a device, let's lock it so we can check if it's busy */
-	mutex_lock(&dev->dev_mutex);
+	mutex_lock_nested(&dev->dev_mutex, SINGLE_DEPTH_NESTING);
 	if (dev->refcnt > 0) {
 		ret = -EBUSY;
 		goto out_unlock_dev;
@@ -567,6 +580,150 @@ static int ubiblock_resize(struct ubi_volume_info *vi)
 	return 0;
 }
 
+static int ubiblock_shutdown(struct ubi_volume_info *vi)
+{
+	struct ubiblock *dev;
+	struct gendisk *disk;
+	int ret = 0;
+
+	mutex_lock(&devices_mutex);
+	dev = find_dev_nolock(vi->ubi_num, vi->vol_id);
+	if (!dev) {
+		ret = -ENODEV;
+		goto out_unlock;
+	}
+	disk = dev->gd;
+
+out_unlock:
+	mutex_unlock(&devices_mutex);
+
+	if (!ret)
+		blk_mark_disk_dead(disk);
+
+	return ret;
+};
+
+static bool
+match_volume_desc(struct ubi_volume_info *vi, const char *name, int ubi_num, int vol_id)
+{
+	int err, len;
+	struct path path;
+	struct kstat stat;
+
+	if (ubi_num == -1) {
+		/* No ubi num, name must be a vol device path */
+		err = kern_path(name, LOOKUP_FOLLOW, &path);
+		if (err)
+			return false;
+
+		err = vfs_getattr(&path, &stat, STATX_TYPE, AT_STATX_SYNC_AS_STAT);
+		path_put(&path);
+		if (err)
+			return false;
+
+		if (!S_ISCHR(stat.mode))
+			return false;
+
+		if (vi->ubi_num != ubi_major2num(MAJOR(stat.rdev)))
+			return false;
+
+		if (vi->vol_id != MINOR(stat.rdev) - 1)
+			return false;
+
+		return true;
+	}
+
+	if (vol_id == -1) {
+		if (vi->ubi_num != ubi_num)
+			return false;
+
+		len = strnlen(name, UBI_VOL_NAME_MAX + 1);
+		if (len < 1 || vi->name_len != len)
+			return false;
+
+		if (strcmp(name, vi->name))
+			return false;
+
+		return true;
+	}
+
+	if (vi->ubi_num != ubi_num)
+		return false;
+
+	if (vi->vol_id != vol_id)
+		return false;
+
+	return true;
+}
+
+#define UBIFS_NODE_MAGIC  0x06101831
+static inline int ubi_vol_is_ubifs(struct ubi_volume_desc *desc)
+{
+	int ret;
+	uint32_t magic_of, magic;
+	ret = ubi_read(desc, 0, (char *)&magic_of, 0, 4);
+	if (ret)
+		return 0;
+	magic = le32_to_cpu(magic_of);
+	return magic == UBIFS_NODE_MAGIC;
+}
+
+static void __init ubiblock_create_auto_rootfs(struct ubi_volume_info *vi)
+{
+	int ret, is_ubifs;
+	struct ubi_volume_desc *desc;
+
+	if (strcmp(vi->name, "rootfs") &&
+	    strcmp(vi->name, "fit"))
+		return;
+
+	desc = ubi_open_volume(vi->ubi_num, vi->vol_id, UBI_READONLY);
+	if (IS_ERR(desc))
+		return;
+
+	is_ubifs = ubi_vol_is_ubifs(desc);
+	ubi_close_volume(desc);
+	if (is_ubifs)
+		return;
+
+	ret = ubiblock_create(vi);
+	if (ret)
+		pr_err("UBI error: block: can't add '%s' volume, err=%d\n",
+			vi->name, ret);
+}
+
+static void
+ubiblock_create_from_param(struct ubi_volume_info *vi)
+{
+	int i, ret = 0;
+	bool got_param = false;
+	struct ubiblock_param *p;
+
+	/*
+	 * Iterate over ubiblock cmdline parameters. If a parameter matches the
+	 * newly added volume create the ubiblock device for it.
+	 */
+	for (i = 0; i < ubiblock_devs; i++) {
+		p = &ubiblock_param[i];
+
+		if (!match_volume_desc(vi, p->name, p->ubi_num, p->vol_id))
+			continue;
+
+		got_param = true;
+		ret = ubiblock_create(vi);
+		if (ret) {
+			pr_err(
+			       "UBI: block: can't add '%s' volume on ubi%d_%d, err=%d\n",
+			       vi->name, p->ubi_num, p->vol_id, ret);
+		}
+		break;
+	}
+
+	/* auto-attach "rootfs" volume if existing and non-ubifs */
+	if (!got_param && IS_ENABLED(CONFIG_MTD_ROOTFS_ROOT_DEV))
+		ubiblock_create_auto_rootfs(vi);
+}
+
 static int ubiblock_notify(struct notifier_block *nb,
 			 unsigned long notification_type, void *ns_ptr)
 {
@@ -574,13 +731,13 @@ static int ubiblock_notify(struct notifier_block *nb,
 
 	switch (notification_type) {
 	case UBI_VOLUME_ADDED:
-		/*
-		 * We want to enforce explicit block device creation for
-		 * volumes, so when a volume is added we do nothing.
-		 */
+		ubiblock_create_from_param(&nt->vi);
 		break;
 	case UBI_VOLUME_REMOVED:
 		ubiblock_remove(&nt->vi);
+		break;
+	case UBI_VOLUME_SHUTDOWN:
+		ubiblock_shutdown(&nt->vi);
 		break;
 	case UBI_VOLUME_RESIZED:
 		ubiblock_resize(&nt->vi);
@@ -602,56 +759,6 @@ static int ubiblock_notify(struct notifier_block *nb,
 static struct notifier_block ubiblock_notifier = {
 	.notifier_call = ubiblock_notify,
 };
-
-static struct ubi_volume_desc * __init
-open_volume_desc(const char *name, int ubi_num, int vol_id)
-{
-	if (ubi_num == -1)
-		/* No ubi num, name must be a vol device path */
-		return ubi_open_volume_path(name, UBI_READONLY);
-	else if (vol_id == -1)
-		/* No vol_id, must be vol_name */
-		return ubi_open_volume_nm(ubi_num, name, UBI_READONLY);
-	else
-		return ubi_open_volume(ubi_num, vol_id, UBI_READONLY);
-}
-
-static void __init ubiblock_create_from_param(void)
-{
-	int i, ret = 0;
-	struct ubiblock_param *p;
-	struct ubi_volume_desc *desc;
-	struct ubi_volume_info vi;
-
-	/*
-	 * If there is an error creating one of the ubiblocks, continue on to
-	 * create the following ubiblocks. This helps in a circumstance where
-	 * the kernel command-line specifies multiple block devices and some
-	 * may be broken, but we still want the working ones to come up.
-	 */
-	for (i = 0; i < ubiblock_devs; i++) {
-		p = &ubiblock_param[i];
-
-		desc = open_volume_desc(p->name, p->ubi_num, p->vol_id);
-		if (IS_ERR(desc)) {
-			pr_err(
-			       "UBI: block: can't open volume on ubi%d_%d, err=%ld\n",
-			       p->ubi_num, p->vol_id, PTR_ERR(desc));
-			continue;
-		}
-
-		ubi_get_volume_info(desc, &vi);
-		ubi_close_volume(desc);
-
-		ret = ubiblock_create(&vi);
-		if (ret) {
-			pr_err(
-			       "UBI: block: can't add '%s' volume on ubi%d_%d, err=%d\n",
-			       vi.name, p->ubi_num, p->vol_id, ret);
-			continue;
-		}
-	}
-}
 
 static void ubiblock_remove_all(void)
 {
@@ -678,18 +785,7 @@ int __init ubiblock_init(void)
 	if (ubiblock_major < 0)
 		return ubiblock_major;
 
-	/*
-	 * Attach block devices from 'block=' module param.
-	 * Even if one block device in the param list fails to come up,
-	 * still allow the module to load and leave any others up.
-	 */
-	ubiblock_create_from_param();
-
-	/*
-	 * Block devices are only created upon user requests, so we ignore
-	 * existing volumes.
-	 */
-	ret = ubi_register_volume_notifier(&ubiblock_notifier, 1);
+	ret = ubi_register_volume_notifier(&ubiblock_notifier, 0);
 	if (ret)
 		goto err_unreg;
 	return 0;

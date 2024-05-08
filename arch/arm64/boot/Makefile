@@ -20,6 +20,7 @@ targets := Image Image.bz2 Image.gz Image.lz4 Image.lzma Image.lzo Image.zst
 
 $(obj)/Image: vmlinux FORCE
 	$(call if_changed,objcopy)
+	$(obj)/mkimage -E -B 0x1000 -p 0x1000 -f $(obj)/bpi_script $(obj)/uImage
 
 $(obj)/Image.bz2: $(obj)/Image FORCE
 	$(call if_changed,bzip2)

@@ -12,7 +12,9 @@
 
 #include <objtool/elf.h>
 
+#ifndef __weak
 #define __weak __attribute__((weak))
+#endif
 
 struct pv_state {
 	bool clean;

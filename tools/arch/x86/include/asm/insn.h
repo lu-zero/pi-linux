@@ -7,8 +7,8 @@
  * Copyright (C) IBM Corporation, 2009
  */
 
-#include <asm/byteorder.h>
 /* insn_attr_t is defined in inat.h */
+#include <linux/kernel.h>
 #include "inat.h" /* __ignore_sync_check__ */
 
 #if defined(__BYTE_ORDER) ? __BYTE_ORDER == __LITTLE_ENDIAN : defined(__LITTLE_ENDIAN)
