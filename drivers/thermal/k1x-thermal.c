@@ -11,6 +11,7 @@
 #include <linux/reset.h>
 #include "thermal_hwmon.h"
 #include "k1x-thermal.h"
+#include "thermal_hwmon.h"
 
 #define MAX_SENSOR_NUMBER		5
 
@@ -71,7 +72,7 @@ static int init_sensors(struct platform_device *pdev)
 
 	if (s->sr[1] >= MAX_SENSOR_NUMBER) {
 		dev_err(&pdev->dev, "un-fitable sensor range\n");
-		return -EINVAL;	
+		return -EINVAL;
 	}
 
 #if 0
@@ -285,16 +286,24 @@ static int k1x_thermal_probe(struct platform_device *pdev)
 
 	/* then register the thermal zone */
 	for (i = s->sr[0]; i <= s->sr[1]; ++i) {
+		struct thermal_zone_device *tzd;
 		s->sdesc[i].base = s->base;
 
-		s->sdesc[i].tzd = devm_thermal_of_zone_register(dev,
-				i, s->sdesc + i, &k1x_of_thermal_ops);
-		if (IS_ERR(s->sdesc[i].tzd)) {
-			ret = PTR_ERR(s->sdesc[i].tzd);
-			dev_err(dev, "faild to register sensor id %d: %d\n",
-					i, ret);
+		tzd = devm_thermal_of_zone_register(dev, i, s->sdesc + i, &k1x_of_thermal_ops);
+		if (IS_ERR(tzd)) {
+			ret = PTR_ERR(tzd);
+			dev_err_probe(dev, ret, "faild to register sensor id %d", i);
 			return ret;
 		}
+		tzd->tzp->no_hwmon = false;
+
+		ret = devm_thermal_add_hwmon_sysfs(dev, tzd);
+		if (ret < 0) {
+			dev_err_probe(dev, ret, "failed to register the hwmon entry");
+			return ret;
+		}
+
+		s->sdesc[i].tzd = tzd;
 
 		ret = devm_request_threaded_irq(dev, s->irq, k1x_thermal_irq,
 				k1x_thermal_irq_thread, IRQF_SHARED,
